@@ -485,7 +485,7 @@ process.on('unhandledRejection', (err) => {
                                 await new Promise(resolve => setTimeout(resolve, 15000));
                                 console.log('No redirect to Google Drive detected.');
                             }
-                            UpdateDatabaseUserVolumes(series, userVolumes);
+                            UpdateDatabaseUserVolumes(series, ++userVolumes);
                         }
                         else {
                             // await page.screenshot({ path: 'second_debug_no_button.png' });
@@ -511,6 +511,7 @@ process.on('unhandledRejection', (err) => {
         }
     };
     
+    let currentVolNum = 1;
     // Loop through each novel URL and process it
     for (const novelUrl of novelUrls) {
         // await new Promise(resolve => setTimeout(resolve, 500));
@@ -530,6 +531,8 @@ process.on('unhandledRejection', (err) => {
         await navigateToDownloadPage(novelUrl);
 
         counter += 1;
+
+        console.log(`${currentVolNum++} out of ${novelUrls.length}.`)
     }
 
     await browser.close();
