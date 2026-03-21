@@ -1,20 +1,23 @@
 const { firefox } = require('playwright');
 const { withExtension } = require('playwright-webextext');
-const { keyboard, Key } = require('@nut-tree-fork/nut-js');
+const { keyboard, Key, mouse } = require('@nut-tree-fork/nut-js');
 const chokidar = require('chokidar');
 const path = require('path');
 const fs = require('fs');
 const { get } = require('https');
 const { title } = require('process');
 
+const {DownloadLinksGetter, countDownloadLinks, filterDownloadLinks, extractSlugFromUrl, fetchPostBySlug } = require('./utils');
+const { console } = require('inspector');
+
 
 let currentVolume = 0;
 let novelName = '';
 const downloadPath = 'F:/Light Novels/';
-const textFilePath = 'Script for all novel links/pdf_keyword_links.txt';
 const databasePath = 'Database Files/seriesDB.json';
 
-const fileContents = fs.readFileSync(textFilePath, "utf8");
+let counter = 0; 
+
 const database = JSON.parse(fs.readFileSync(databasePath, "utf8"));
 
 let novelUrls = [];
@@ -35,73 +38,50 @@ process.on('unhandledRejection', (err) => {
     const browser = await browserTypeWithExtension.launch({
         headless: true,
     });
-    const context = await browser.newContext({
-        acceptDownloads: true,
-    });
-    const page = await context.newPage();
-
-    let novelFolder = null;
-
-    page.on('download', async (download) => {
-        const fileName = await download.suggestedFilename();
-        const filePath = path.join(novelFolder, fileName);
-        await download.saveAs(filePath);
-        console.log(`✅ Downloaded: ${filePath}`);
-    });
-            
-
-    const filePath = path.join(__dirname, 'Novels With More than one ol.txt');
-
+    let context = null;
     
-    const appendNovelSection = async (sectionTitle, novelTitle) => {
-        let fileContent = '';
-
-        if (fs.existsSync(filePath)) {
-            fileContent = fs.readFileSync(filePath, 'utf8');
-        } else {
-            fs.writeFileSync(filePath, '');
+    let novelFolder = null;
+    
+    let page = await pageUtil();
+    
+    async function pageUtil() {
+        if (context) {
+            await context.close();
         }
+        
+        context = await browser.newContext({
+            acceptDownloads: true,
+        });
 
-        const sectionRegex = new RegExp(`${sectionTitle}:\\n([\\s\\S]*?)(?=\\n\\w|$)`, 'i');
-        const match = fileContent.match(sectionRegex);
+        const page = await context.newPage();
 
-        if (match) {
-            const existingSections = match[0];
-            const novelsInSection = match[1];
+        await page.on('download', async (download) => {
+            const fileName = await download.suggestedFilename();
+            const filePath = await path.join(novelFolder, fileName);
+            await download.saveAs(filePath);
+            console.log(`✅ Downloaded: ${filePath}`);
+        });
 
-            if (novelsInSection.includes(novelTitle)) {
-                console.log(`Novel "${novelTitle}" already exists in the "${sectionTitle}" section.`);
-                return;
-            }
-
-            const updatedSection = `${existingSections.trim()}\n${novelTitle}`;
-            fileContent = fileContent.replace(existingSections, updatedSection);
-        }
-        else {
-            fileContent += `\n${sectionTitle}:\n${novelTitle}\n`;
-        }
-
-        fs.writeFileSync(filePath, fileContent);
-        console.log(`✅ Novel "${novelTitle}" added under "${sectionTitle}".`);
+        return page;
     }
-
+            
     const setDynamicDownloadPath = async (novelName) => {
-        const safeNovelName = novelName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').replace(/\.+$/, '').trim();
+        let safeNovelName = novelName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').replace(/\.+$/, '').trim();
 
         const existingFolders = await fs.promises.readdir(downloadPath, { withFileTypes: true });
         const existingNames = existingFolders
             .filter(dirent => dirent.isDirectory())
             .map(dirent => dirent.name);
 
-        novelName = safeNovelName;
+        // novelName = safeNovelName;
         for (const folder of existingNames) {
-            if (novelName.toLowerCase().includes(folder.toLowerCase())) {
-            novelName = folder;
+            if (folder.toLowerCase().includes(safeNovelName.toLowerCase())) {
+                safeNovelName = folder;
             break;
             }
         }
 
-        const novelFolder = path.join(downloadPath, novelName);
+        const novelFolder = path.join(downloadPath, safeNovelName);
 
         await fs.promises.mkdir(novelFolder, { recursive: true });
 
@@ -149,8 +129,21 @@ process.on('unhandledRejection', (err) => {
         return watcher;
     }
 
-    const AreVolumesDownloaded = async (novelFolder, numOfVolumes) => {
-        // const novelFolder = path.join(downloadPath, novelName);
+    const GetVolumeFromDatabase = async (novelName) =>{
+        let series = database.find(s => s.seriesName === novelName);
+
+        return series;
+    }
+
+    const UpdateDatabaseUserVolumes = async (series, downloadedCount) =>{
+        
+        console.log(series);
+        series.downloadedVolumes = downloadedCount;
+        console.log(series);
+        fs.writeFileSync('Database Files/seriesDB.json', JSON.stringify(database, null, 2));
+    }
+
+    const DownloadedVolumesCount = async (novelName, novelFolder) => {
         if (!fs.existsSync(novelFolder)) {
             return false;
         }
@@ -160,7 +153,15 @@ process.on('unhandledRejection', (err) => {
             return fs.statSync(fullPath).isFile();
         });
 
-        if (files.length === numOfVolumes) {
+        if (files.length === undefined){
+            files.length = 0
+        }
+
+        return files.length
+    }
+
+    const AreVolumesDownloaded = async (userVolumeCount, numOfVolumes) => {
+        if (userVolumeCount === numOfVolumes) {
             return true;
         }
         else {
@@ -190,7 +191,7 @@ process.on('unhandledRejection', (err) => {
                 const x = Math.floor(Math.random() * 300 + 100);
                 const y = Math.floor(Math.random() * 300 + 100);
                 await page.mouse.move(x, y);
-                await page.mouse.click(x, y);
+                await page.mouse.click(300, 300);
 
                 // Also simulate keyboard input (optional)
                 await page.keyboard.press('Shift');
@@ -202,34 +203,14 @@ process.on('unhandledRejection', (err) => {
         }
     };
 
-    // Navigate to the main page
-    const mainUrl = 'https://jnovels.com/light-novel-pdf-jp/';
-    await page.goto(mainUrl, { waitUntil: 'networkidle' });
 
-    // Collect all novel links
-    // novelUrls = await page.evaluate(() => {
-    //     const links = Array.from(document.querySelectorAll('a'));
-    //     return links
-    //         .map(link => ({
-    //             // Get the text of the link for folder naming
-    //             title: link.textContent.trim(),
-    //             href: link.href
-    //         }))
-    //         .filter(({ href }) =>
-    //             href && (
-    //                 (href.includes('light-novel-pdf') && !href.includes('light-novel-pdf-jp') && !href.includes('light-novel-pdf-jnovels')) ||
-    //                 (href.includes('all-volumes-pdf') && !href.includes('light-novel-pdf-jp') && !href.includes('light-novel-pdf-jnovels')) ||
-    //                 (href.includes('light-novel-epub') && !href.includes('light-novel-pdf-jp') && !href.includes('light-novel-pdf-jnovels')) ||
-    //                 (href.includes('light-novel-pdfs') && !href.includes('light-novel-pdf-jp') && !href.includes('light-novel-pdf-jnovels')) ||
-    //                 (href.endsWith('-pdf/') && !href.includes('light-novel-pdf-jp') && !href.includes('light-novel-pdf-jnovels')) ||
-    //                 (href.endsWith('-light-novel/') && !href.includes('light-novel-pdf-jp') && !href.includes('light-novel-pdf-jnovels')) ||
-    //                 (href.includes('light-novels-pdfs') && !href.includes('light-novel-pdf-jp') && !href.includes('light-novel-pdf-jnovels'))
-    //             )
-    //         );
-    // });
-    
+
+    // Navigate to the main page
+    // const mainUrl = 'https://jnovels.com/light-novel-pdf-jp/';
+    // await page.goto(mainUrl, { waitUntil: 'networkidle' });
+
     novelUrls = database.map(series => ({
-        title: null,
+        title: series.seriesName,
         href: series.seriesLink
     })).filter(Boolean);
 
@@ -238,331 +219,301 @@ process.on('unhandledRejection', (err) => {
     // Function to navigate to download pages
     const navigateToDownloadPage = async ({title, href}) => {
         try {
-            await page.goto(href, { waitUntil: 'networkidle'});
-
-            //Novel name if using the text file
-            const titleElement = await page.$("h1.post-title.entry-title");
-            const titleText = await titleElement.textContent();
-
-             // Sanitize the folder name when using original link
-            // const novelName = title.replace(/[\/:*?"<>|]/g, '');
+            // await page.goto(href, { waitUntil: 'networkidle'});
 
             // Sanitize the folder name when using text file links
-            novelName = titleText
-                .replace(/[\/:*?"<>|]/g, '')
-                .replace(/\.?pdf$/i, '')
-                .replace(/^download\s*/i, '')
-                .trim();
+            novelName = title;
             console.log(`Processing novel: ${novelName}`);
 
-            let allElements = await page.$$('.post-content');
+            const slug = await extractSlugFromUrl(href);
+            
+            const postData = await fetchPostBySlug(slug, href);
 
-            if (title !== 'Date A Live') {
-                for (let element of allElements) {
-                    let pElement = await element.$$('p');
-                    let olElements = await element.$$('ol');
-                    if (pElement) {
-                        for (let element of pElement) {
-                            const pText = await (await element.getProperty('innerText')).jsonValue();
-                            if (pText.toLowerCase() === 'official version') {
-                                appendNovelSection('OFFICIAL VERSION', novelName);
-                                return;
-                            }
-                            else if (pText.toLowerCase() === 'official translation') {
-                                appendNovelSection('OFFICIAL TRANSLATION', novelName);
-                                return;
-                            }
-                            else if (pText.toLowerCase() === 'official releases') {
-                                appendNovelSection('OFFICIAL RELEASES', novelName);
-                                return;
-                            }
-                            else if (pText.toLowerCase() === 'official') {
-                                appendNovelSection('OFFICIAL', novelName);
+            let downloadLinks = await DownloadLinksGetter(novelName, postData.content.rendered);
+
+            novelFolder = await setDynamicDownloadPath(novelName);
+
+            let series = await GetVolumeFromDatabase(novelName);
+
+            let userVolumes = await DownloadedVolumesCount(novelName, novelFolder);
+
+            const isTrue = await AreVolumesDownloaded(userVolumes, countDownloadLinks(downloadLinks));
+
+            if (isTrue) {
+                console.log(`All volumes for ${novelName} have been downloaded.`);
+                if (series.downloadedVolumes != userVolumes) {
+                    UpdateDatabaseUserVolumes(series, userVolumes);
+                }
+                return;
+            }
+            
+            let watcher = await downloadedFiles(novelFolder);
+
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            
+            async function openLinks(links, watcher) {
+                for (let i = 1; i < links.length + 1; i++) {
+                    const isFileExists = await fileExists(novelFolder, i);
+                    if (isFileExists) {
+                        console.log(`Volume ${i} for ${novelName} has been downloaded.`);
+                        continue;
+                    }
+
+                    currentVolume = i;
+
+                    const link = links[i - 1].attribs.href;
+                    if (link.includes('usheethe') || link.includes('chuxoast')) {
+                        console.log(`Skipping link ${i} as it is from links: ${link}`);
+                        continue;
+                    }
+                    console.log(`Opening link ${i + 1}: ${link}`);
+                    const maxRetries = 3;
+                    let attempt = 0;
+                    let success = false;
+
+                    while (attempt < maxRetries && !success) {
+                        try {
+                            await page.goto(link, { waitUntil: 'load', timeout: 30000 });
+                            success = true;
+                        } catch (error) {
+                            console.log(`Attempt ${attempt + 1} failed: ${error}`);
+                            attempt++;
+                            if (attempt < maxRetries) {
+                                console.log('Retrying...');
+                                try {
+                                    await page.reload({ waitUntil: 'load', timeout: 30000 });
+                                } catch (reloadError) {
+                                    console.log(`Reload failed: ${reloadError}`);
+                                }
+                            } else {
+                                console.log('Max retries reached. Skipping this page.');
                                 return;
                             }
                         }
                     }
+                    
+                    await page.bringToFront();
+                    await page.focus('body');
 
-                    if (olElements){
-                        if (olElements.length > 1) {
-                            appendNovelSection('NOVELS THAT HAVE MORE THAN ONE OL', novelName);
-                            return;
+                    // await page.reload({ waitUntil: 'networkidle' });
+
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+
+                    let recaptchaCheckbox = null;
+                    try {
+                        const frameHandle = await page.$('#iframe');
+                        let frame = null;
+                        
+                        if (frameHandle) {
+                            frame = await frameHandle.contentFrame();
+                        }
+                        // const frameHandle = await document.querySelector('#iframe');
+                        
+
+                        if (frame) {
+                            recaptchaCheckbox = await frame.$('#recaptcha-anchor');
+                        }
+
+                    } catch (error) {
+                        console.log(`Error with frame loading: ${error}`);
+                    }
+                    
+                    // await page.waitForSelector('.btn-captcha', { visible: true });
+
+                    
+                    // const adEl = await page.$('div.paras-dev-top.text-center');
+                    // await adEl?.evaluate(node => node.remove());
+
+                    // const titleEl = await page.$('html.no-js body a.site-logo');
+
+                    if (recaptchaCheckbox) {
+                        await new Promise(resolve => setTimeout(resolve, 5000));
+                        await recaptchaCheckbox.click();
+                        console.log('Clicked the reCAPTCHA checkbox.');
+
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+
+                        const captchaOverlaySelector = 'div[style*="z-index: 2000000000;"]';
+
+                        // Check if the `div` becomes visible
+                        const captchaOverlayVisible = await page.waitForSelector(captchaOverlaySelector, { visible: true, timeout: 5000 }).catch(() => null);
+
+                        if (captchaOverlayVisible) {
+                            console.log('Captcha overlay is visible. Waiting for it to become invisible.');
+                    
+                            // Wait until the `div` becomes invisible
+                            await page.waitForFunction(
+                                (selector) => {
+                                    const el = document.querySelector(selector);
+                                    return !el || el.style.visibility === 'hidden' || el.style.opacity === '0';
+                                },
+                                { timeout: 60000 },
+                                captchaOverlaySelector
+                            );
+                            console.log('Captcha overlay is now invisible. Continuing...');
+                        } else {
+                            console.log('Captcha overlay did not appear.');
+                        }
+                    }
+                    else {
+                        try {
+                            const selector = 'html.no-js body div.content div#paras-devgenerate.paras-dev-bottom.text-center form center div.cf-turnstile div';
+                            const selector2 = await page.$('html.no-js body div.content div#paras-devgenerate.paras-dev-bottom.text-center form center div.cf-turnstile div');
+                            await page.waitForSelector(selector, { visible: true });
+
+                            for (let i = 0; i < 50; i++) {
+                                const isFocused = await page.evaluate(sel => {
+                                    const el = document.querySelector(sel);
+                                    return el && document.activeElement === el;
+                                }, selector);
+
+                                if (isFocused) {
+                                    console.log('Target element focused');
+                                    await page.keyboard.press('Tab');
+                                    break;
+                                }
+
+                                await page.keyboard.press('Tab');
+                                await page.waitForTimeout(150);
+                            }
+
+                            await page.keyboard.press('Space');
+                        } catch (error) {
+                            console.log(`Error with captcha clicker: ${error}`);
+                        }
+
+                        let downloadButton;
+
+                        // Click on the download buttons
+                        try {
+                            
+                            await page.waitForSelector('.btn-captcha', { visible: true });
+                            downloadButton = await page.$('.btn-captcha');
+                        } catch (error) {
+                            console.log(`Download button error: ${error}`);
+                        }
+                        
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                        await downloadButton.click();
+                        console.log('Clicked the download button.');
+
+                        await new Promise(resolve => setTimeout(async () => {
+                            console.log('⏳ Waiting 12 seconds and keeping page active...');
+                            try {
+                                await keepPageActive(page, 10000); // Make sure this function does what you expect
+                            } catch (err) {
+                                console.error('❌ Error during keepPageActive:', err);
+                            }
+                            resolve();
+                        }, 12000));
+                        
+                        // await page.waitForSelector('.btn-captcha', { visible: true });
+
+                        console.log('🔍 Looking for buttons with class `.btn-captcha`...');
+                        const buttons = await page.$$('.btn-captcha');
+                        console.log(`🧮 Found ${buttons.length} buttons.`);
+                        
+                        if (buttons.length === 0) {
+                            console.log('❌ No buttons found after clicking the download button.');
+                            continue; // or break; depending on your loop structure
+                        }
+                        
+                        // Iterate through buttons to find the one without the "disabled" class
+                        let targetButton = null;
+                        for (const button of buttons) {
+                            const className = await (await button.getProperty('className')).jsonValue();
+                            console.log(`➡️ Button class: ${className}`);
+                        
+                            if (!className.includes('disabled')) {
+                                // Optionally check if button is visible/enabled
+                                const isVisible = await button.boundingBox() !== null;
+                                if (isVisible) {
+                                    console.log('✅ Found a clickable button!');
+                                    targetButton = button;
+                                    break;
+                                } else {
+                                    console.log('⚠️ Button is not visible on screen.');
+                                }
+                            } else {
+                                console.log('⛔ Button is disabled.');
+                            }
+                        }
+                        
+                        // if (!targetButton) {
+                        //     console.log('❌ No enabled, visible target button found.');
+                        //     // Optionally take a screenshot to debug
+                        //     await page.screenshot({ path: 'debug_no_button.png' });
+                        //     break; // Or handle it however you need
+                        // }
+                        console.log('🖱️ Clicking target button...');
+                        await targetButton.click();
+
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                        for (let i = 0; i < 7; i++) {
+                            await page.keyboard.press('Tab');
+                        }
+                        await page.keyboard.press('Enter');
+                        
+                        await keepPageActive(page, 15000, 1000);
+                        
+                        const finalDownloadButton = await page.waitForSelector('.get-link', { visible: true });
+
+                        const button_className = await (await finalDownloadButton.getProperty('className')).jsonValue();
+                        console.log(`➡️ Final button class: ${button_className}`);
+
+                        if (finalDownloadButton) {
+                            // await page.screenshot({ path: 'second_debug_no_button.png' });
+                            
+                            await finalDownloadButton.click();
+                            await new Promise(resolve => setTimeout(resolve, 10000));
+                            const currentUrl = page.url();
+                            console.log('🌐 Current URL:', currentUrl);
+                            if (currentUrl.includes('drive.usercontent.google.com/download')) {
+                                console.log('Redirected to Google Drive download page.');
+                                try {
+                                    // Wait for the download button to appear
+                                    const driveDownloadButton = await page.waitForSelector('.jfk-button-action', { visible: true, timeout: 5000 });
+                                    if (driveDownloadButton) {
+                                        await driveDownloadButton.click();
+                                        console.log('Clicked the Google Drive download button.');
+                                        await new Promise(resolve => setTimeout(resolve, 10000));
+                                    }
+                                } catch (error) {
+                                    console.error('Error clicking the Google Drive download button:', error);
+                                }
+                            } else {
+                                await new Promise(resolve => setTimeout(resolve, 15000));
+                                console.log('No redirect to Google Drive detected.');
+                            }
+                            UpdateDatabaseUserVolumes(series, userVolumes);
+                        }
+                        else {
+                            // await page.screenshot({ path: 'second_debug_no_button.png' });
+                            
+                            console.log('❌ Final download button not found.');
+
+                            console.log('🌐 Current URL:', page.url());
                         }
                     }
                 }
-
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                // Stop watching after renaming one file
+                watcher.close();
+                console.log("All links processed.");
             }
-
-            let moreElements = [];
-            for (let element of allElements) {
-                // Targets all <ol> tags
-                let olElements = await element.$$('ol');
-
-                if (title === 'Classroom Of The Elite') {
-                    if (olElements.length) {
-                        olElements.pop();
-                        moreElements.push(...olElements);
-                        break;
-                    }
-                }
-                else if (title === 'Date A Live') {
-                    if (olElements.length) {
-                        olElements.shift();
-                        moreElements.push(...olElements);
-                    }
-                }
-                else {
-                    if (olElements.length) {
-                        moreElements.push(...olElements);
-                        break;
-                    }
-                }
-            }
-
-            // let downloadLinks = [];
-            // for (let expandable of moreElements) {
-            //     // Find all `<a>` elements within `.hide-expandable`
-            //     let anchorElements = await expandable.$$('a'); 
-
-            //     for (let anchor of anchorElements) {
-            //         const anchorText = await (await anchor.getProperty('innerText')).jsonValue();
-
-            //         if (anchorText.trim().toUpperCase() === 'DOWNLOAD' || anchorText.trim().toUpperCase().includes('VOLUME')) {
-            //             // Extract the URL
-            //             let downloadUrl = await (await anchor.getProperty('href')).jsonValue();
-                        
-            //             if (downloadUrl.startsWith('http://')) {
-            //                 downloadUrl = downloadUrl.replace('http://', 'https://');
-            //             }
-            //             downloadLinks.push( {url: downloadUrl });
-            //         }
-            //         else {
-            //             continue;
-            //         }
-            //     }
-            // }
-
-            // novelFolder = await setDynamicDownloadPath(novelName);
-
-            // const isTrue = await AreVolumesDownloaded(novelFolder, downloadLinks.length);
-
-            // if (isTrue) {
-            //     console.log(`All volumes for ${novelName} have been downloaded.`);
-            //     return;
-            // }
-            
-            // let watcher = await downloadedFiles(novelFolder);
-
-            // await new Promise(resolve => setTimeout(resolve, 5000));
-            
-            // async function openLinks(links, watcher) {
-            //     for (let i = 1; i < links.length + 1; i++) {
-            //         const isFileExists = await fileExists(novelFolder, i);
-            //         if (isFileExists) {
-            //             console.log(`Volume ${i} for ${novelName} has been downloaded.`);
-            //             continue;
-            //         }
-
-            //         currentVolume = i;
-
-            //         const link = links[i - 1].url;
-            //         if (link.includes('usheethe') || link.includes('chuxoast')) {
-            //             console.log(`Skipping link ${i} as it is from links: ${link}`);
-            //             continue;
-            //         }
-            //         console.log(`Opening link ${i + 1}: ${link}`);
-            //         await Promise.all([
-            //             page.waitForNavigation(),
-            //             page.goto(link),
-            //         ]);
-                    
-            //         await new Promise(resolve => setTimeout(resolve, 5000));
-
-            //         const frameHandle = await page.$('#iframe');
-            //         const frame = null;
-            //         let recaptchaCheckbox = null;
-            //         if (frameHandle) {
-            //             frame = await frameHandle.contentFrame();
-            //         }
-            //         // const frameHandle = await document.querySelector('#iframe');
-                    
-
-            //         if (frame) {
-            //             recaptchaCheckbox = await frame.$('#recaptcha-anchor');
-            //         }
-
-
-            //         // Click on the download buttons
-            //         const downloadButton = await page.$('.btn-captcha');
-            //         if (downloadButton) {
-            //             if (recaptchaCheckbox) {
-            //                 await new Promise(resolve => setTimeout(resolve, 5000));
-            //                 await recaptchaCheckbox.click();
-            //                 console.log('Clicked the reCAPTCHA checkbox.');
-
-            //                 await new Promise(resolve => setTimeout(resolve, 3000));
-
-            //                 const captchaOverlaySelector = 'div[style*="z-index: 2000000000;"]';
-
-            //                 // Check if the `div` becomes visible
-            //                 const captchaOverlayVisible = await page.waitForSelector(captchaOverlaySelector, { visible: true, timeout: 5000 }).catch(() => null);
-
-            //                 if (captchaOverlayVisible) {
-            //                     console.log('Captcha overlay is visible. Waiting for it to become invisible.');
-                        
-            //                     // Wait until the `div` becomes invisible
-            //                     await page.waitForFunction(
-            //                         (selector) => {
-            //                             const el = document.querySelector(selector);
-            //                             return !el || el.style.visibility === 'hidden' || el.style.opacity === '0';
-            //                         },
-            //                         { timeout: 60000 },
-            //                         captchaOverlaySelector
-            //                     );
-            //                     console.log('Captcha overlay is now invisible. Continuing...');
-            //                 } else {
-            //                     console.log('Captcha overlay did not appear.');
-            //                 }
-            //             }
-            //             else {
-            //                 await new Promise(resolve => setTimeout(resolve, 5000));
-            //                 for (let i = 0; i < 4; i++) {
-            //                     await page.keyboard.press('Tab');
-            //                 }
-            //                 await page.keyboard.press('Space');
-            //             }
-                        
-            //             await new Promise(resolve => setTimeout(resolve, 3000));
-            //             await downloadButton.click();
-            //             console.log('Clicked the download button.');
-
-            //             await new Promise(resolve => setTimeout(async () => {
-            //                 console.log('⏳ Waiting 12 seconds and keeping page active...');
-            //                 try {
-            //                     await keepPageActive(page, 12000); // Make sure this function does what you expect
-            //                 } catch (err) {
-            //                     console.error('❌ Error during keepPageActive:', err);
-            //                 }
-            //                 resolve();
-            //             }, 12000));
-                        
-            //             console.log('🔍 Looking for buttons with class `.btn-captcha`...');
-            //             const buttons = await page.$$('.btn-captcha');
-            //             console.log(`🧮 Found ${buttons.length} buttons.`);
-                        
-            //             if (buttons.length === 0) {
-            //                 console.log('❌ No buttons found after clicking the download button.');
-            //                 continue; // or break; depending on your loop structure
-            //             }
-                        
-            //             // Iterate through buttons to find the one without the "disabled" class
-            //             let targetButton = null;
-            //             for (const button of buttons) {
-            //                 const className = await (await button.getProperty('className')).jsonValue();
-            //                 console.log(`➡️ Button class: ${className}`);
-                        
-            //                 if (!className.includes('disabled')) {
-            //                     // Optionally check if button is visible/enabled
-            //                     const isVisible = await button.boundingBox() !== null;
-            //                     if (isVisible) {
-            //                         console.log('✅ Found a clickable button!');
-            //                         targetButton = button;
-            //                         break;
-            //                     } else {
-            //                         console.log('⚠️ Button is not visible on screen.');
-            //                     }
-            //                 } else {
-            //                     console.log('⛔ Button is disabled.');
-            //                 }
-            //             }
-                        
-            //             if (!targetButton) {
-            //                 console.log('❌ No enabled, visible target button found.');
-            //                 // Optionally take a screenshot to debug
-            //                 await page.screenshot({ path: 'debug_no_button.png' });
-            //                 break; // Or handle it however you need
-            //             }
-            //             await page.screenshot({ path: 'second_debug_no_button.png' });
-            //             console.log('🖱️ Clicking target button...');
-            //             await targetButton.click();
-
-            //             await new Promise(resolve => setTimeout(resolve, 3000));
-            //             for (let i = 0; i < 7; i++) {
-            //                 await page.keyboard.press('Tab');
-            //             }
-            //             await page.keyboard.press('Enter');
-                        
-            //             await keepPageActive(page, 15000, 1000);
-                        
-            //             const finalDownloadButton = await page.waitForSelector('.get-link', { visible: true });
-
-            //             const button_className = await (await finalDownloadButton.getProperty('className')).jsonValue();
-            //             console.log(`➡️ Final button class: ${button_className}`);
-
-            //             if (finalDownloadButton) {
-            //                 // await page.screenshot({ path: 'second_debug_no_button.png' });
-                            
-            //                 await finalDownloadButton.click();
-            //                 await new Promise(resolve => setTimeout(resolve, 10000));
-            //                 const currentUrl = page.url();
-            //                 console.log('🌐 Current URL:', currentUrl);
-            //                 if (currentUrl.includes('drive.usercontent.google.com/download')) {
-            //                     console.log('Redirected to Google Drive download page.');
-            //                     try {
-            //                         // Wait for the download button to appear
-            //                         const driveDownloadButton = await page.waitForSelector('.jfk-button-action', { visible: true, timeout: 5000 });
-            //                         if (driveDownloadButton) {
-            //                             await driveDownloadButton.click();
-            //                             console.log('Clicked the Google Drive download button.');
-            //                             await new Promise(resolve => setTimeout(resolve, 10000));
-            //                         }
-            //                     } catch (error) {
-            //                         console.error('Error clicking the Google Drive download button:', error);
-            //                     }
-            //                 } else {
-            //                     await new Promise(resolve => setTimeout(resolve, 15000));
-            //                     console.log('No redirect to Google Drive detected.');
-            //                 }
-
-            //             }
-            //             else {
-            //                 // await page.screenshot({ path: 'second_debug_no_button.png' });
-                            
-            //                 console.log('❌ Final download button not found.');
-
-            //                 console.log('🌐 Current URL:', page.url());
-            //             }
-            //         }
-            //     }
-            //     await new Promise(resolve => setTimeout(resolve, 5000));
-            //     // Stop watching after renaming one file
-            //     watcher.close();
-            //     console.log("All links processed.");
-            // }
             
             // Start opening links
-            // await openLinks(downloadLinks, watcher);
+            await openLinks(downloadLinks, watcher);
             
-
             
         } catch (error) {
-            console.error(`Error navigating to ${url}:`, error);
+            console.error(`Error navigating to ${page.url()}:`, error);
         }
     };
     
     // Loop through each novel URL and process it
     for (const novelUrl of novelUrls) {
-        // console.log(`Processing novel: ${novelUrl.title}`);
-        // if (novelUrl.title === 'Ascendance of a Bookworm: Royal Academy Stories – First Year' || novelUrl.title === 'Baccano!'
-        //      || novelUrl.title === 'Boku no Hero Academia Yuuei Hakusho' || novelUrl.title === 'Boku no Imouto wa Kanji ga Yomeru' 
-        //      || novelUrl.title === 'Boogiepop and Others' || novelUrl.title === 'Boogiepop' || novelUrl.title === 'Akaoni Contract with a Vampire'
-        //      || novelUrl.title === 'Boogiepop Returns: VS Imaginator' || novelUrl.title === 'Harem Castle' || novelUrl.title === 'Harem Dynast'
-        //      || novelUrl.title === 'Harem Pirates' || novelUrl.title === 'Harem Sister' || novelUrl.title === 'Bokutachi wa Benkyou ga Dekinai Short Story Collection'
-        //     || novelUrl.title === 'Maoyuu Maou Yuusha' || novelUrl.title === 'Mardock Scramble' || novelUrl.title === 'Ecstas Online' || novelUrl.title === 'I Adopted a Villainous Dad'
-        //     || novelUrl.title === 'Milk Princess') {
-        //     continue;
-        // }
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // await new Promise(resolve => setTimeout(resolve, 500));
 
         //Code for testing specific link
         // link = {
@@ -571,7 +522,14 @@ process.on('unhandledRejection', (err) => {
         // };
         // await navigateToDownloadPage(link);
 
+        if (counter == 15) {
+           page = await pageUtil();
+           counter = 0;
+        }
+
         await navigateToDownloadPage(novelUrl);
+
+        counter += 1;
     }
 
     await browser.close();
