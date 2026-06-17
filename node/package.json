@@ -1,0 +1,29 @@
+{
+  "dependencies": {
+    "@ghostery/adblocker": "^2.17.3",
+    "@ghostery/adblocker-extended-selectors": "^2.17.3",
+    "@jitsi/robotjs": "^0.6.22",
+    "@nut-tree-fork/nut-js": "^4.2.6",
+    "@playwright/test": "^1.60.0",
+    "axios": "^1.16.1",
+    "cheerio": "^1.2.0",
+    "chokidar": "^5.0.0",
+    "domutils": "^4.0.2",
+    "fetch": "^1.1.0",
+    "html-entities": "^2.6.0",
+    "htmlparser2": "^12.0.0",
+    "jsdom": "^29.1.1",
+    "node-fetch": "^3.3.2",
+    "npx": "^10.2.2",
+    "p-limit": "^7.3.0",
+    "playwright": "^1.26.0",
+    "playwright-webextext": "^0.0.5",
+    "puppeteer": "^25.1.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-adblocker": "^2.13.6",
+    "puppeteer-extra-plugin-recaptcha": "^3.6.8",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "puppeteer-real-browser": "^1.4.4",
+    "tslib": "^2.8.1"
+  }
+}
