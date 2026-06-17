@@ -6,3 +6,7 @@ personalChecker.js
 Script for all novel links
 oldCode.txt
 seriesDB copy.json
+dist
+build
+main.spec
+pyinstaller command.txt
